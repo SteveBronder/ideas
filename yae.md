@@ -2,8 +2,7 @@
 
 ## My Ideal Matrix Library
 
-I want to write my perfect matrix/tensor library. E
-igen is great, but there are a few things that are not possible in their project.
+I want to write my perfect matrix/tensor library. Eigen is great, but there are a few things that are not possible in their project.
 And by "not possible" I mean that I or others have offered to implement or have implemented these things and they either did not work given Eigen's backend code or the Eigen team did not like them.
 
 1. The matrices should be usable in a constexpr context.
@@ -44,7 +43,9 @@ ten2.set_random();
 Tensor<opt, Dynamic, 2, 3> res = ten1 * ten2;
 ```
 
-3. The matrices should be allocator aware. One of the largest benefits of C++ is being able to manage your own memory. Along with this, fixed size matrices should have an option to have their memory still come from an allocator.
+3. The matrices should be allocator aware.
+One of the largest benefits of C++ is being able to manage your own memory.
+Along with this, fixed size matrices should have an option to have their memory still come from an allocator.
 
 ```c++
 // Make a polymorphic allocator with an underlying buffer to handle new resources
@@ -77,7 +78,11 @@ Tensor<dynamic_opt, 5, 2, 10000> res = (ten1 * ten3).allocator(other_alloc);
 
 4. It should have a nice API like Eigen
 
-- I'd like to make it somewhere between blaze and Eigen. Like Eigen, I like the idea of forcing users to use an array wrapper for array like operations. Unlike Eigen, I prefer we use free functions instead of member functions. In the example below we make a tensor, use the `to_array()` and then C++23's pipe operator to element-wise exponentiate and sum the tensor. Then the sum sum is computed and added to an expression for a tensor multiplication.
+- I'd like to make it somewhere between blaze and Eigen.
+Like Eigen, I like the idea of forcing users to use an array wrapper for array like operations.
+Unlike Eigen, I prefer we use free functions instead of member functions.
+In the example below we make a tensor, use the `to_array()` and then C++23's pipe operator to element-wise exponentiate and sum the tensor.
+Then the sum sum is computed and added to an expression for a tensor multiplication.
 
 ```c++
 using yae::Tensor, yae::Dynamic, yae::Index, yae::Options;
@@ -91,7 +96,8 @@ auto ten1_exp_sum = yae::to_array(ten1) | yae::exp | yae::sum;
 auto res = ten1 * ten2 + ten1_exp_sum;
 ```
 
-5. It should be extensible by users. For a particular CPU or GPU the user should be able to override operations and information given to the program so that they are able to fully utilize their hardware.
+5. It should be extensible by users.
+For a particular CPU or GPU the user should be able to override operations and information given to the program so that they are able to fully utilize their hardware.
 
 ```c++
 namespace yae {
@@ -207,7 +213,9 @@ Eigen is a fantastic package, but over the years I've found a few issues with it
 4. GPU support is second class, sitting in their unsupported Tensor library
 5. It's rather hard to extend, for instance if you know a better GEMM for your CPU, too bad!
 6. Though Eigen has the `Map` class, it can be difficult to use your own allocator and requires a lot of extra boilerplate
-7. Eigen does not support perfect forwarding within its expression templates, which does not allow nice memory reuse and can lead to bugs in hanging refs. For example in the below code, `3.0` is a temporary local. Eigen's expressions only take references to the input expressions and so Eigen would lose that `3.0` once we exit the function.
+7. Eigen does not support perfect forwarding within its expression templates, which does not allow nice memory reuse and can lead to bugs in hanging refs.
+For example in the below code, `3.0` is a temporary local.
+Eigen's expressions only take references to the input expressions and so Eigen would lose that `3.0` once we exit the function.
 
 ```c++
 inline auto foo(const Eigen::MatrixXd& x) {
@@ -216,7 +224,8 @@ inline auto foo(const Eigen::MatrixXd& x) {
 }
 ```
 
-The points in the summary directly address these. The goal of this library is to address those shortcomings.
+The points in the summary directly address these.
+The goal of this library is to address those shortcomings.
 
 ---
 
@@ -243,7 +252,8 @@ The points in the summary directly address these. The goal of this library is to
         - Requires passing sizes at runtime and allocates via the chosen allocator.
 
 - **Allocator aware**
-  - By default, `Options<>` uses a default allocator users do not need to pass. To control where a tensor allocates its storage, supply your own allocator type in `Options` and pass an allocator instance to the constructor.
+  - By default, `Options<>` uses a default allocator users do not need to pass.
+To control where a tensor allocates its storage, supply your own allocator type in `Options` and pass an allocator instance to the constructor.
 
 ```cpp
 // Make a tensor allocated in a monotonic buffer resource
@@ -323,7 +333,8 @@ concept CpuInfo = requires(Info x) {
 ```
 
 - **`CpuEngine<Info>`**
-  Ties an `Info` model (e.g. `DefaultCPU`) to a CPU. Because functions that use concepts choose the most specific candidate function, writing your own overload for `Engine<MyCpu>` will allow you to overload functions for your device.
+  Ties an `Info` model (e.g. `DefaultCPU`) to a CPU.
+Because functions that use concepts choose the most specific candidate function, writing your own overload for `Engine<MyCpu>` will allow you to overload functions for your device.
 
 - **`GpuInfo` concept**
 
@@ -352,7 +363,8 @@ concept GpuInfo = requires(Info x) {
 
 - **`GpuEngine<Info>`**
 
-Ties an `Info` model (e.g. `DefaultGPU`) to the vector-intrinsics implementation. Because functions that use concepts choose the most specific candidate function, writing your own overload for `Engine<MyGpu>` will allow you to overload functions for your device.
+Ties an `Info` model (e.g. `DefaultGPU`) to the vector-intrinsics implementation.
+Because functions that use concepts choose the most specific candidate function, writing your own overload for `Engine<MyGpu>` will allow you to overload functions for your device.
 
 ### Examples
 
@@ -367,7 +379,8 @@ yae::Tensor<Opt, 3, 3> A;
 
 2. **Custom allocator + GPU engine**
 
-The below example creates a dynamically sized tensor using cuda unified memory. Even with fixed sized tensors, if a tensor's compute is done on the GPU then it's memory will be dynamically created using the allocator.
+The below example creates a dynamically sized tensor using cuda unified memory.
+Even with fixed sized tensors, if a tensor's compute is done on the GPU then it's memory will be dynamically created using the allocator.
 
 ```cpp
 using alloc_t = std::pmr::polymorphic_allocator<float>;
@@ -390,7 +403,8 @@ yae::Tensor<GOpt, Dynamic, 64, 64> C = A + B;
 
 3. **Injecting a custom CPU descriptor**
 
-In this example we make a custom CPU overload and pass it to a tensor. When evaluating the tensor, cache sizes, core count, and the number of prefetchers are utilized for optimal iteration, GEMM, and decompositions.
+In this example we make a custom CPU overload and pass it to a tensor.
+When evaluating the tensor, cache sizes, core count, and the number of prefetchers are utilized for optimal iteration, GEMM, and decompositions.
 
 ```cpp
 namespace yae {
@@ -484,7 +498,8 @@ using DynOpt = yae::Options<double,
 ### How Eigen programmers should *think* about `Options`
 
 - **Plug-and-play policy**
-  Instead of juggling separate Map/Matrix types or global flags, you carry *one* `Options` typedef through your code. Swapping memory resource or engine is just a template alias change.
+  Instead of juggling separate Map/Matrix types or global flags, you carry *one* `Options` typedef through your code.
+Swapping memory resource or engine is just a template alias change.
 
 ```cpp
 // Starting with base options we can modify the options we want to change using type traits
@@ -531,7 +546,8 @@ yae::Matrix<yae::Options<const double>, 4, 4> V(M.data());
 ### Teaching existing vs. new users
 
 - **Existing Eigen users**
-  - You keep familiar shape aliases (`Matrix`, `Map` → `Tensor<...,R,C>`) but adopt a uniform policy-based API. No more free-standing `.array()` or `Eigen::internal` hacks.
+  - You keep familiar shape aliases (`Matrix`, `Map` → `Tensor<...,R,C>`) but adopt a uniform policy-based API.
+    No more free-standing `.array()` or `Eigen::internal` hacks.
 - **New users**
   - Learn *one* composable `Options` bundle instead of separate types. The template parameters are orthogonal: pick your scalar, allocator, engine, and you’re done.
 
