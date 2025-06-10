@@ -28,19 +28,20 @@ using opt = Options<double,
   yae::GPUEngine<yae::DefaultGPU>>;
 // Dynamic sized Tensor allocated in alloc with dims [5, 2, 8]
 yae::cuda_unified_allocator alloc{};
-// Tensors are associated with a device
-yae::cuda_device ggpu_device{0};
+// Tensors are associated with device 0
+yae::cuda_device gpu_device{0};
 Tensor<opt, Dynamic, 2, 8> ten1(alloc, gpu_device, 5, 2, 8);
 ten1.set_random();
 // Each tensor must be on the same device
 Tensor<opt, Dynamic, 8, 3> ten2(alloc, gpu_device, 5, 8, 3);
 ten2.set_random();
-// Follow numpy rules to contract on last axis of ten1 and second to last axis of ten2 for [5, 2, 3]
+// Follow numpy rules to contract on last axis of ten1 and
+// second to last axis of ten2 for [5, 2, 3]
 // batch 5 and contract (2x8) * (8x3) = (5, 2, 3)
 Tensor<opt, Dynamic, 2, 3> res = ten1 * ten2;
 ```
 
-3. The matrices should be allocator aware. One of the largest benefits of C++ is being able to manage your own memory. Along with this, fixed size matrices should have an option to be allocated on the heap.
+3. The matrices should be allocator aware. One of the largest benefits of C++ is being able to manage your own memory. Along with this, fixed size matrices should have an option to have their memory still come from an allocator.
 
 ```c++
 // Make a polymorphic allocator with an underlying buffer to handle new resources
@@ -73,7 +74,7 @@ Tensor<dynamic_opt, 5, 2, 10000> res = (ten1 * ten3).allocator(other_alloc);
 
 4. It should have a nice API like Eigen
 
-- I'd like to make it somewhere between blaze and Eigen. Like Eigen, I like the idea of forcing users to use an array wrapper for array like operations. Unlike Eigen, I prefer we use free functions instead of member functions. In the example below we make a tensor, use the pipe operator to perform array an exponential and sum, and then the sum sum is computed and added to an expression for a tensor multiplication.
+- I'd like to make it somewhere between blaze and Eigen. Like Eigen, I like the idea of forcing users to use an array wrapper for array like operations. Unlike Eigen, I prefer we use free functions instead of member functions. In the example below we make a tensor, use the `to_array()` and then C++23's pipe operator to element-wise exponentiate and sum the tensor. Then the sum sum is computed and added to an expression for a tensor multiplication.
 
 ```c++
 using yae::Tensor, yae::Dynamic, yae::Index, yae::Options;
@@ -119,16 +120,28 @@ struct CpuEngine<i913900KF> {
   static constexpr std::size_t e_l2_cache_size = 4.194e+6;
   static constexpr std::size_t e_l3_cache_num = 4;
   static constexpr std::size_t e_l3_cache_size = 3.146e+6;
+  // number of l1 data cache's across all cores
+  static constexpr std::size_t l1_dcache_num = 8;
+  // size of l1 data cache available to each core
+  static constexpr std::size_t l1_dcache_size = 49152;
+  // number of l1 instruction caches across all cores
+  static constexpr std::size_t l1_icache_num = 8;
+  // size of l1 instruction cache across all cores
+  static constexpr std::size_t l1_icache_size = 32768;
+  // l2 cache info
+  static constexpr std::size_t l2_cache_num = 2;
+  static constexpr std::size_t l2_cache_size = 8.389e+6;
+  // l3 cache info
+  static constexpr std::size_t l3_cache_num = 3;
+  static constexpr std::size_t l3_cache_size = 8.389e+6;
 
   static constexpr std::size_t total_threads = 32;
   static constexpr std::size_t prefetchers = 8;
-  static constexpr std::array instruction_sets{General,
-    SSE, SSE2, SSE3, SSE4_1, SSE4_2, SSSE3, AVX2, BMI1, BMI2, F16C, AVX512F,
-    AVX512CD, AVX512PF, AVX512ER, AVX512BW, AVX512DQ, AVX512VL, AVX512_IFMA,
-    AVX512_VBMI, AVX512_VBMI2, AVX512_BITALG, AVX512_VPOPCNTDQ, AVX512_4FMAPS,
-    AVX512_4VNNIW, AVX512_FP16, AVX512_BF16, AVX512_VNNI, AVX512_VP2INTERSECT,
-    VAES,  VPCLMULQDQ, GFNI};
-  // This should be in a seperate SysInfo struct
+  static constexpr std::array instruction_sets{Instructions::x86_64,
+    MMX, EMMX, SSE, SSE2, SSE3, SSE4_1, SSE4_2, SSSE3,
+    AVX, AVX2, ABM, BMI1, BMI2, FMA3, RdRand, ADX, CLMUL,
+    F16C};
+  // This should be in a separate SysInfo struct
   static constexpr std::size_t page_size = 16384;
 };
 
@@ -137,7 +150,7 @@ concept Enginei913900KF =
   is_expression<T> &&
   is_same<CpuEngine<i913900KF>, engine_type_t<T>>;
 
-// Use concept to overspecialize dot product for above
+// Use concept to override dot product for above
 template <Enginei913900KF Expr1, Enginei913900KF Expr2>
 constexpr inline auto dot_product(Expr1&& expr1, Expr2&& expr2) {
   // My very clever dot product code...
@@ -157,7 +170,7 @@ vec_2.set_random();
 double res = dot_product(vec_1, vec_2);
 ```
 
-A utility will be available to auto generate the CPU information structs users given their CPU.
+Using the [cpu_features](https://github.com/google/cpu_features) library, a utility will be available to auto generate general information for a users CPU.
 
 6. Smartly reusing memory when possible.
 
@@ -189,9 +202,9 @@ Eigen is a fantastic package, but over the years I've found a few issues with it
 3. It's was originally written in C++03, which means Eigen's code has a lot of workarounds for expression templating that both limit the code and make it very difficult to parse and compile.
 3. Because of (3) constexpr matrix types will never be a thing (it has been tried and reverted sadly)
 4. GPU support is second class, sitting in their unsupported Tensor library
-5. It's rather hard to extend, for instance if you know a better optimization for your CPU's dot product, too bad!
+5. It's rather hard to extend, for instance if you know a better GEMM for your CPU, too bad!
 6. Though Eigen has the `Map` class, it can be difficult to use your own allocator and requires a lot of extra boilerplate
-7. Eigen does not support perfect forwarding within its expression templates, which does not allow nice memory reuse and can lead to bugs in hanging refs
+7. Eigen does not support perfect forwarding within its expression templates, which does not allow nice memory reuse and can lead to bugs in hanging refs. For example in the below code, `3.0` is a temporary local. Eigen's expressions only take references to the input expressions and so Eigen would lose that `3.0` once we exit the function.
 
 ```c++
 inline auto foo(const Eigen::MatrixXd& x) {
@@ -208,18 +221,17 @@ The points in the summary directly address these. The goal of this library is to
 
 ### Introducing new named concepts
 
-- **`Tensor<Options, std::integral... Dims>`**
+**`Tensor<Options, std::integral... Dims>`**
   - The core multi-dimensional array type.
 
 - **Template parameters**
 
   - `Options<>`
-  - Packs the compile time config options for a particular tensor.
+    - Packs the compile time config options for a particular tensor.
 
   - `Dims...`
-    Dimension sizes: compile-time constants for fixed axes, or the sentinel `Dynamic` for runtime sizing.
+    - Dimension sizes: compile-time constants for fixed axes, or the sentinel `Dynamic` for runtime sizing.
     - **Fixed vs. dynamic dimensions**
-
       - **Fixed-size** `(Dims != Dynamic ) &&...`
         - By default allocates all storage on stack and supports `constexpr` evaluation.
         - Users can set a flag `ForceDynamic` in `Options<>` that will force fixed sized matrices to be allocated in an allocator.
@@ -265,19 +277,10 @@ yae::Tensor<yae::Options<const double>, yae::Dynamic, yae::Dynamic>
 - **Replacing `Eigen::Map`**
 Instead of `Eigen::Map<Matrix<double,R,C>>(ptr)`, we can pass a pointer to a Tensor and it will assume it does not manage that memory.
 
-```cpp
-// For compile time sized tensors we do not pass sizes
-yae::Tensor<yae::Options<double>, 5, 10>  M(ptr);
-// For dynamic sizes we must pass sizes at runtime
-yae::Tensor<yae::Options<double>, Dynamic, Dynamic>  M(ptr, 5, 10);
-```
+You get the same zero-copy "view" semantics without a separate Map class or boilerplate.
 
-You get the same zero-copy “view” semantics without a separate Map class or boilerplate.
-
-### Introducing New Named Concepts
-
-- **`Options<Scalar, Index, Allocator, Engine, Layout, AccessorPolicy>`**
-  - The compile-time “policy bundle” that drives every tensor’s element type, indexing, memory resource, execution backend, data layout, and accessor behavior.
+**`Options<Scalar, Index, Allocator, Engine, Layout, AccessorPolicy>`**
+ - The compile-time "policy bundle" that drives every tensor’s element type, indexing, memory resource, execution backend, data layout, and accessor behavior.
 
 ```cpp
 template<
@@ -293,7 +296,7 @@ struct Options { ... };
 
 The layout and accessor policy come from c++23's `mdspan` which is used in the tensor for managing access to memory.
 
-The Engine must satisfy either the `CpuInfo` concept or the `GpuInfo` concept.
+The `Engine` inside of the `Option` must satisfy either the `CpuInfo` or `GpuInfo` concept.
 
 - **`CpuInfo` concept**
 
@@ -302,23 +305,22 @@ The `CpuInfo` concept gives the minimum values that must be passed to be accepte
 ```cpp
 template <typename Info>
 concept CpuInfo = requires(Info x) {
-  Info::total_cores;
-  Info::l1_dcache_num;
-  Info::l1_dcache_size;
-  Info::l1_icache_num;
-  Info::l1_icache_size;
-  Info::l2_cache_num;
+  Info::total_cores; // total cores available
+  Info::l1_dcache_num; // number of l1 data cache's across all cores
+  Info::l1_dcache_size; // size of l1 data cache available to each core
+  Info::l1_icache_num; // number of l1 instruction caches across all cores
+  Info::l1_icache_size; // size of l1 instruction cache across all cores
+  Info::l2_cache_num; // l2 info
   Info::l2_cache_size;
-  Info::l3_cache_num;
+  Info::l3_cache_num; // l3 info
   Info::l3_cache_size;
-  Info::total_threads;
-  Info::prefetchers;
-  Info::instruction_sets;
+  Info::prefetchers; // number of prefetchers for the CPU
+  Info::instruction_sets; // array of instruction sets for this CPU
 };
 ```
 
 - **`CpuEngine<Info>`**
-  Ties an `Info` model (e.g. `DefaultCPU`) to the vector-intrinsics implementation. Because functions that use concepts choose the most specific candidate function, writing your own overload for `Engine<MyCpu>` will allow you to overload functions for your device.
+  Ties an `Info` model (e.g. `DefaultCPU`) to a CPU. Because functions that use concepts choose the most specific candidate function, writing your own overload for `Engine<MyCpu>` will allow you to overload functions for your device.
 
 - **`GpuInfo` concept**
 
@@ -327,8 +329,9 @@ The `GpuInfo` concept gives the minimum values that must be passed to be accepte
 ```cpp
 template <typename Info>
 concept GpuInfo = requires(Info x) {
-  Info::vendor;
-  Info::compute_units;
+  Info::vendor; // amd or nvidia, etc.
+  Info::backend; // Backend gpu is compiled to i.e. yae::backend::cuda, yae::backend::sycl
+  Info::compute_units; //
   Info::compute_capability;
   Info::max_work_item_dims;
   Info::max_work_item_sizes;
@@ -361,7 +364,7 @@ yae::Tensor<Opt, 3, 3> A;
 
 2. **Custom allocator + GPU engine**
 
-The below example creates a dynamically sized tensor using cuda unified memory.
+The below example creates a dynamically sized tensor using cuda unified memory. Even with fixed sized tensors, if a tensor's compute is done on the GPU then it's memory will be dynamically created using the allocator.
 
 ```cpp
 using alloc_t = std::pmr::polymorphic_allocator<float>;
@@ -373,8 +376,13 @@ using GOpt = yae::Options<
               std::uint32_t
             >;
 alloc_t alloc(&cuda_resource);
-// B’s storage lives in my_resource and uses the cuda backend
-yae::Tensor<GOpt, Dynamic, 64, 64> B(alloc, 128, 64, 64);
+// instantiate a gpu device
+yae::cuda_device gpu_device{0};
+// A and B's storage lives in alloc and uses the cuda backend
+yae::Tensor<GOpt, Dynamic, 64, 64> A(alloc, gpu_device, 128, 64, 64);
+yae::Tensor<GOpt, 128, 64, 64> B(alloc, gpu_device);
+// Kernel created and executed here.
+yae::Tensor<GOpt, Dynamic, 64, 64> C = A + B;
 ```
 
 3. **Injecting a custom CPU descriptor**
@@ -382,12 +390,63 @@ yae::Tensor<GOpt, Dynamic, 64, 64> B(alloc, 128, 64, 64);
 In this example we make a custom CPU overload and pass it to a tensor. When evaluating the tensor, cache sizes, core count, and the number of prefetchers are utilized for optimal iteration, GEMM, and decompositions.
 
 ```cpp
-// Make a dummy struct for specializing the CpuEngine
-struct MyCPU {};
+namespace yae {
+// Overload for Intel Raptor Cove i9 13900KF
+// See https://en.wikichip.org/wiki/intel/core_i9/i9-13900kf
+struct i913900KF;
+using yae::Instructions;
+template <>
+struct CpuEngine<i913900KF> {
+  static constexpr std::string_view name = "i9-13900KF";
+  static constexpr std::size_t total_cores = 24;
+  // number of l1 data cache's across all cores
+  static constexpr std::size_t l1_dcache_num = 8;
+  // size of l1 data cache available to each core
+  static constexpr std::size_t l1_dcache_size = 49152;
+  // number of l1 instruction caches across all cores
+  static constexpr std::size_t l1_icache_num = 8;
+  // size of l1 instruction cache across all cores
+  static constexpr std::size_t l1_icache_size = 32768;
+  // l2 cache info
+  static constexpr std::size_t l2_cache_num = 2;
+  static constexpr std::size_t l2_cache_size = 8.389e+6;
+  // l3 cache info
+  static constexpr std::size_t l3_cache_num = 3;
+  static constexpr std::size_t l3_cache_size = 8.389e+6;
 
-template<> struct CpuEngine<MyCPU> { /* tuning parameters... */ };
+  static constexpr std::size_t total_threads = 32;
+  static constexpr std::size_t prefetchers = 8;
+  static constexpr std::array instruction_sets{Instructions::x86_64,
+    MMX, EMMX, SSE, SSE2, SSE3, SSE4_1, SSE4_2, SSSE3,
+    AVX, AVX2, ABM, BMI1, BMI2, FMA3, RdRand, ADX, CLMUL,
+    F16C};
+  // This should be in a separate SysInfo struct
+  static constexpr std::size_t page_size = 16384;
+};
 
-using MyOpt = yae::Options<double, std::allocator<double>, CpuEngine<MyCPU>>;
+template <typename T>
+concept Tensori913900KF =
+  is_tensor<T> &&
+  is_same<CpuEngine<i913900KF>, engine_type_t<T>>;
+
+// Use concept to override dot product for above
+template <Tensori913900KF T1, Tensori913900KF T2>
+constexpr inline auto dot_product(T1&& ten_1, T2 ten_2) {
+  // My very clever dot product code...
+}
+}
+
+using yae::Vector, yae::Dynamic, yae::Index, yae::Options;
+using opt = Options<double,
+  Index,
+  yae::default_alloctor<double>,
+  yae::CPUEngine<yae::i913900KF>>;
+Vector<opt, Dynamic> vec_1(5);
+vec_1.set_random();
+Vector<opt, Dynamic> vec_2(5);
+vec_2.set_random();
+// Tensor multiplication can use the info above.
+double res = dot_product(vec_1, vec_2);
 ```
 
 4. **Layout and accessor policies**
@@ -474,7 +533,7 @@ error: cannot assign Tensor<...,PoolA> to Tensor<...,PoolB>;
 
 - **Array-style transformations**
 
-  - **`to_array(expr)`**: view a tensor as an “array expression” for element-wise ops
+  - **`to_array(expr)`**: view a tensor as an "array expression" for element-wise ops
   - **Pipe operator** (`|`): chain array transforms like `exp`, `sum`, etc., returning a lazy expression
 
 ---
@@ -532,7 +591,7 @@ auto R       = T1 * T2 + sum_exp;
 ```
 
 5. **User-extensible engines and intrinsics**
-   - You can specialize `CpuEngine<MyCPU>` or overload `yae` for your microarchitecture. A helper can auto-generate your CPU’s cache sizes and instruction sets for you.
+   - You can specialize `CpuEngine<MyCPU>` or overload `yae` for your architecture. A helper can auto-generate your CPU’s cache sizes and instruction sets for you.
 
 6. **Smart memory reuse**
    - Temporaries get moved and reused in place when safe:
@@ -547,7 +606,7 @@ auto X = to_array(std::move(M)) | yae::exp;  // reuses M’s buffer
 
 **Overview of Code-generation via Expression Templates**
 
-When you write a chained tensor expression, nothing computes immediately. Instead, each operator builds a node in a compile-time expression tree. Only when you assign or explicitly call evaluate do we “walk” that tree and emit real loops.
+When you write a chained tensor expression, nothing computes immediately. Instead, each operator builds a node in a compile-time expression tree. Only when you assign or explicitly call evaluate do we "walk" that tree and emit real loops.
 
 #### 1. Lazy expression trees
 
@@ -619,7 +678,7 @@ AddExpr<
 */
 ```
 
-(Note from steve) I'm stil working this out, but I think there is a way to use the arity of the expression along with the dimensions of the problem to setup how to best utilize the prefetchers.
+(Note from steve) I'm still working this out, but I think there is a way to use the arity of the expression along with the dimensions of the problem to setup how to best utilize the prefetchers.
 
 #### 2. Materialization via `evaluate()`
 
@@ -769,7 +828,7 @@ inline std::ostream& operator<<(std::ostream& os, kernel_parts& parts) {
 }
 ```
 
-An example base expression for elementwise expressions looks like the following. You can see a full impl [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp#L1) in Stan Math.
+An example base expression for element-wise expressions looks like the following. You can see a full impl [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp#L1) in Stan Math.
 
 ```cpp
 template<class T>
