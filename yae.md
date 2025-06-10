@@ -918,6 +918,7 @@ Nothing that bad. We will stay with Eigen being pretty much the only used matrix
 - What parts of the design do you expect to resolve through the RFC process before this gets merged?
 
   - Should the GPU backend be CUDA or should we target something like [Triton](https://github.com/triton-lang/triton) and use the LLVM jit to compile?
+  - Should we target supporting computation over multiple devices? That would be a lot of work but tmk no one has a nice C++ library for that yet.
 
 - What parts of the design do you expect to resolve through the implementation of this feature before stabilization?
   - Mostly I'd like to resolve whether others think this kind of library is a good idea.
