@@ -2,11 +2,13 @@
 
 ## My Ideal Matrix Library
 
-I want to write my perfect matrix/tensor library. Eigen is great, but there are a few things that are not possible in their project.
+I want to write my perfect matrix/tensor library.
+Eigen is great, but there are a few things that are not possible in their project.
 And by "not possible" I mean that I or others have offered to implement or have implemented these things and they either did not work given Eigen's backend code or the Eigen team did not like them.
 
 1. The matrices should be usable in a constexpr context.
-Often times we have to do some precomputation before running an algorithm. It is nice to be able to execute that computation during compilation.
+Often times we have to do some precomputation before running an algorithm.
+It is nice to be able to execute that computation during compilation.
 
 ```c++
 static constexpr double mat_data[4] = {1.0, 2.0, 3.0, 4.0};
@@ -549,7 +551,8 @@ yae::Matrix<yae::Options<const double>, 4, 4> V(M.data());
   - You keep familiar shape aliases (`Matrix`, `Map` → `Tensor<...,R,C>`) but adopt a uniform policy-based API.
     No more free-standing `.array()` or `Eigen::internal` hacks.
 - **New users**
-  - Learn *one* composable `Options` bundle instead of separate types. The template parameters are orthogonal: pick your scalar, allocator, engine, and you’re done.
+  - Learn *one* composable `Options` bundle instead of separate types.
+The template parameters are orthogonal: pick your scalar, allocator, engine, and you’re done.
 
 - **Array-style transformations**
 
@@ -584,7 +587,8 @@ yae::Tensor<yae::Options<double,yae::Index,PolyAlloc>,
 t1.set_random();
 ```
 
-   When you combine two tensors with different allocators, you’ll get a clear compile-time error. You can then explicitly choose the result allocator:
+   When you combine two tensors with different allocators, you’ll get a clear compile-time error.
+You can then explicitly choose the result allocator:
 
 ```text
 error: cannot multiply tensors with different allocators;
@@ -611,7 +615,8 @@ auto R       = T1 * T2 + sum_exp;
 ```
 
 5. **User-extensible engines and intrinsics**
-   - You can specialize `CpuEngine<MyCPU>` or overload `yae` for your architecture. A helper can auto-generate your CPU’s cache sizes and instruction sets for you.
+   - You can specialize `CpuEngine<MyCPU>` or overload `yae` for your architecture.
+A helper can auto-generate your CPU’s cache sizes and instruction sets for you.
 
 6. **Smart memory reuse**
    - Temporaries get moved and reused in place when safe:
@@ -626,7 +631,9 @@ auto X = to_array(std::move(M)) | yae::exp;  // reuses M’s buffer
 
 **Overview of Code-generation via Expression Templates**
 
-When you write a chained tensor expression, nothing computes immediately. Instead, each operator builds a node in a compile-time expression tree. Only when you assign or explicitly call evaluate do we "walk" that tree and emit real loops.
+When you write a chained tensor expression, nothing computes immediately.
+Instead, each operator builds a node in a compile-time expression tree.
+Only when you assign or explicitly call evaluate do we "walk" that tree and emit real loops.
 
 #### 1. Lazy expression trees
 
@@ -677,7 +684,10 @@ struct ExpExpr : BaseExpr<ExpExpr<Expr>> {
 
 Expressions which change the dimensionality of the underlying will override methods for query dimension sizes.
 
-(Note from steve) Each expression keeps a compile time value indicating the overall arity of the expression. For instance, an expression that adds four tensors together will have an arity of 4. I'm still working this out, but I think there is a way to use the arity of the expression along with the dimensions of the problem to setup how to best utilize the prefetchers and cache access. For instance, if we had a big operation that used 8 large tensors it may be useful to run the subexpressions in smaller batches, using the prefetchers over the underlying batches of arrays.
+(Note from steve) Each expression keeps a compile time value indicating the overall arity of the expression.
+For instance, an expression that adds four tensors together will have an arity of 4.
+I'm still working this out, but I think there is a way to use the arity of the expression along with the dimensions of the problem to setup how to best utilize the prefetchers and cache access.
+For instance, if we had a big operation that used 8 large tensors it may be useful to run the subexpressions in smaller batches, using the prefetchers over the underlying batches of arrays.
 
 ```cpp
 auto expr = arr_1 + arr_2 + arr_3 + arr_4; // binary op
@@ -776,7 +786,8 @@ constexpr void array_evaluate(Out&& out, Expr&& expr) {
 
 GPU kernel fusion would operate much like Stan Math's [OpenCL kernel fusion](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp).
 
-The expressions for GPU kernels will accumulate the components of a kernel into separate strings representing the overall kernel. When the kernel needs to be evaluated, the kernel components will be accumulated into one string and compiled at runtime via a runtime driver.
+The expressions for GPU kernels will accumulate the components of a kernel into separate strings representing the overall kernel.
+When the kernel needs to be evaluated, the kernel components will be accumulated into one string and compiled at runtime via a runtime driver.
 
 ```cpp
 struct kernel_parts {
@@ -844,7 +855,8 @@ inline std::ostream& operator<<(std::ostream& os, kernel_parts& parts) {
 }
 ```
 
-An example base expression for element-wise expressions on the gpu looks like the following. You can see a full impl [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp#L1) in Stan Math.
+An example base expression for element-wise expressions on the gpu looks like the following.
+You can see a full impl [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp#L1) in Stan Math.
 
 ```cpp
 template<class T>
@@ -892,13 +904,16 @@ class elt_function : public gpu_operation<Derived, Exprs...> {
 };
 ```
 
-Once a kernel needs to be evaluated, all components of the kernel are accumulated, the kernel is compiled via a JIT, the expression arguments are passed to the kernel, and then the kernel is executed. See [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/multi_result_kernel.hpp#L34) For Stan Math's impl for doing this.
+Once a kernel needs to be evaluated, all components of the kernel are accumulated, the kernel is compiled via a JIT, the expression arguments are passed to the kernel, and then the kernel is executed.
+See [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/multi_result_kernel.hpp#L34) For Stan Math's impl for doing this.
 
-More research needs to be done on kernel runtime generation for CUDA. For a cuda target [NVRTC](https://docs.nvidia.com/cuda/archive/10.1/pdf/NVRTC_User_Guide.pdf) is the most likely driver target.
+More research needs to be done on kernel runtime generation for CUDA.
+For a cuda target [NVRTC](https://docs.nvidia.com/cuda/archive/10.1/pdf/NVRTC_User_Guide.pdf) is the most likely driver target.
 
 # Drawbacks
 
-This project would be a huge amount of work. I would only do it with buy in / interest from a lot of people at flatiron.
+This project would be a huge amount of work.
+I would only do it with buy in / interest from a lot of people at flatiron.
 
 The overall picture for this project looks something like the following (+ all the tests for the following)
 
@@ -916,21 +931,27 @@ Each of these 8 steps can each be a huge amount of work.
 The one good thing is that we can actually utilize a lot of other open source projects as the base for this
 
 1. Eigen's packet math can be modified slightly to fit this framework
-2. Stan's OpenCL backend already does the kernel generation. We just need to change it for CUDA.
+2. Stan's OpenCL backend already does the kernel generation.
+We just need to change it for CUDA.
 
 # Rationale and Alternatives
 
 - Why is this design the best in the space of possible designs?
 
-I chose my design based off of Eigen and Blaze, which imo have nice APIs. This design doc is an attempt to handle some of Eigen's short comings while making the UI a little nicer.
+I chose my design based off of Eigen and Blaze, which imo have nice APIs.
+This design doc is an attempt to handle some of Eigen's short comings while making the UI a little nicer.
 
 - What other designs have been considered and what is the rationale for not choosing them?
 
-I've tried making pull requests for several of these things in Eigen. The authors of Eigen do not seem interested in allocator aware matrices. And because of some internal choices they are unable to have matrices that can operate at compile time. While they have a tensor extension in unsupported, it is maintained by google which is notorious for dropping projects.
+I've tried making pull requests for several of these things in Eigen.
+The authors of Eigen do not seem interested in allocator aware matrices.
+And because of some internal choices they are unable to have matrices that can operate at compile time.
+While they have a tensor extension in unsupported, it is maintained by google which is notorious for dropping projects.
 
 - What is the impact of not doing this?
 
-Nothing that bad. We will stay with Eigen being pretty much the only used matrix library in C++.
+Nothing that bad.
+We will stay with Eigen being pretty much the only used matrix library in C++.
 
 # Unresolved questions
 
