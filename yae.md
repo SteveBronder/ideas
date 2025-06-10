@@ -2,9 +2,9 @@
 
 ## My Ideal Matrix Library
 
-I want to write my perfect matrix/tensor library. Eigen is great, but there are a few things that are not possible in there project that I would like to fix with this.
+I want to write my perfect matrix/tensor library. Eigen is great, but there are a few things that are not possible in their project. And by "not possible" I mean that I or others have offered to implement or have implemented these things and they either did not work given Eigen's backend code or the Eigen team did not like them.
 
-1. The matrices should be usable in a constexpr context. Often times we have to do some precomputation before running an algorithm.
+1. The matrices should be usable in a constexpr context. Often times we have to do some precomputation before running an algorithm and it is nice to be able to execute that computation during compilation.
 
 ```c++
 static constexpr double mat_data[4] = {1.0, 2.0, 3.0, 4.0};
@@ -29,7 +29,7 @@ using opt = Options<double,
 // Dynamic sized Tensor allocated in alloc with dims [5, 2, 8]
 yae::cuda_unified_allocator alloc{};
 // Tensors are associated with a device
-yae::cuda_device gpu_device{0};
+yae::cuda_device ggpu_device{0};
 Tensor<opt, Dynamic, 2, 8> ten1(alloc, gpu_device, 5, 2, 8);
 ten1.set_random();
 // Each tensor must be on the same device
