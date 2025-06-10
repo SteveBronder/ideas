@@ -474,7 +474,7 @@ using DynOpt = yae::Options<double,
   std::allocator<double>,
   CpuEngine<DefaultCPU<yae::packing, yae::force_dynamic>>,
   index_t,
-  std::layout_left,
+  std::layout_left
   >;
 ```
 
@@ -485,10 +485,10 @@ using DynOpt = yae::Options<double,
 
 ```cpp
 // Starting with base options we can modify the options we want to change using type traits
-using base_opt = yae::Options<>;
-// Change allocator to std::polymorphic_allocator
+using base_opt = yae::Options<double>;
+// Change allocator to std::polymorphic_allocator<double>
 using polymorphic_opt =
-  yae::change_allocator_t<base_opt, std::polymorphic_allocator<double>>;
+  yae::change_allocator_t<base_opt, std::polymorphic_allocator>;
 // Change to std::layout_right
 using row_major_opt = yae::set_row_major_t<polymorphic_opt>;
 ```
@@ -502,27 +502,28 @@ error: cannot assign Tensor<...,PoolA> to Tensor<...,PoolB>;
 ```
 
 - **Compile-time tuning**
-  Cache sizes, page sizes, and prefetchers all live in your chosen `Info` type. Either the engine
+  Based on cache sizes, page sizes, and prefetchers the engine
   specialization will choose an optimal setup or users can override functions in `yae` explicitly.
 
 ### Migration guidance & error samples
 
 - **From Eigen**
+Matrix to map
 
-  ```cpp
-  // Eigen:
-  Eigen::Matrix<double,4,4> M;
-  Eigen::Map<Eigen::MatrixXd> V(ptr, n, n);
-  ```
+```cpp
+// Eigen:
+Eigen::Matrix<double,4,4> M;
+Eigen::Map<const Eigen::Matrix<double, 4, 4>> V(m.data(), 4, 4);
+```
 
   becomes
 
-  ```cpp
-  // yae:
-  using Opt = yae::Options<double>;
-  yae::Matrix<Opt,4,4> M;
-  yae::Matrix<yae::Options<const double>, Dynamic, Dynamic> V(ptr, n, n);
-  ```
+```cpp
+// yae:
+using Opt = yae::Options<double>;
+yae::Matrix<Opt,4,4> M;
+yae::Matrix<yae::Options<const double>, 4, 4> V(M.data());
+```
 
 ### Teaching existing vs. new users
 
@@ -546,8 +547,8 @@ error: cannot assign Tensor<...,PoolA> to Tensor<...,PoolB>;
 ```cpp
 static constexpr double mat_data[4] = {1,2,3,4};
 using Opt = yae::Options<const double>;
-constexpr yae::Matrix<Opt,2,2>  M(mat_data);
-constexpr yae::Vector<Opt,2>     v({1,2});
+constexpr yae::Matrix<Opt,2,2> M(mat_data);
+constexpr yae::Vector<Opt,2> v({1,2});
 constexpr yae::Vector<Opt,2> r = M * v;  // computed at compile time
 static_assert(r(1,0)==7.0);
 ```
@@ -557,7 +558,7 @@ static_assert(r(1,0)==7.0);
 ```cpp
 using PolyAlloc = std::pmr::polymorphic_allocator<double>;
 std::pmr::monotonic_buffer_resource  mr;
-PolyAlloc                             alloc(&mr);
+PolyAlloc alloc(&mr);
 // 5×2×8 tensor in user-supplied memory
 yae::Tensor<yae::Options<double,yae::Index,PolyAlloc>,
             Dynamic,2,8> t1(alloc,5,2,8);
@@ -572,7 +573,7 @@ error: cannot multiply tensors with different allocators;
 ```
 
 3. **Expression fusion on CPU and GPU**
-   - On CUDA-backed engines you still get fused kernels—no intermediate copies:
+   - On CUDA-backed engines you get fused kernels:
 
 ```cpp
 using Opt = yae::Options<double,Index,
@@ -626,13 +627,16 @@ SumExpr<
 >;
 ```
 
-Each `{*}Expr` node holds references or temporaries of its child node(s) + a functor (`exp`, `sum`, etc.).
+Each `{*}Expr` node has the following
 
-An example exponential expression looks like the following
+1. References or temporaries of subexpressions
+2. `operator()` for scalar access to the expressions values
+3. A `packet(idx)` method for computing in SIMD packets
+An example exponential uses the same CRTP scheme used in Eigen, where a base class defines the `rows()` and `cols()` for this expression.
 
 ```cpp
 template<Expression Expr>
-struct ExpExpr {
+struct ExpExpr : BaseExpr<ExpExpr<Expr>> {
   // Keep track of the number of underlying expressions that actually holding data
   static constexpr std::size_t arity = Expr::arity;
   // own_expr_t decides if we should reference or own the incoming object
@@ -649,18 +653,12 @@ struct ExpExpr {
     using instr_set = get_instr_set<Expr>;
     return yae::exp<instr_set>(expr.packet(i));
   }
-  // For jit kernels on the GPU
-  constexpr kernel() requires(is_gpu_engine<Expr>) {
-    using vendor_t = get_vendor<Expr>;
-    // Can be options like 'fast' for using `__expf` instead of `expf`
-    using gpu_opts = get_gpu_opts<Expr>;
-    // adds exp(x[i]) to the gpu kernel
-    return yae::exp<vendor_t, gpu_opts>(expr);
-  }
 }
 ```
 
-Each expression keeps a compile time value indicating the overall arity of the expression. For instance, an expression that adds four matrices together will have an arity of 4.
+Expressions which change the dimensionality of the underlying will override methods for query dimension sizes.
+
+(Note from steve) Each expression keeps a compile time value indicating the overall arity of the expression. For instance, an expression that adds four tensors together will have an arity of 4. I'm still working this out, but I think there is a way to use the arity of the expression along with the dimensions of the problem to setup how to best utilize the prefetchers and cache access. For instance, if we had a big operation that used 8 large tensors it may be useful to run the subexpressions in smaller batches, using the prefetchers over the underlying batches of arrays.
 
 ```cpp
 auto expr = arr_1 + arr_2 + arr_3 + arr_4; // binary op
@@ -678,7 +676,6 @@ AddExpr<
 */
 ```
 
-(Note from steve) I'm still working this out, but I think there is a way to use the arity of the expression along with the dimensions of the problem to setup how to best utilize the prefetchers.
 
 #### 2. Materialization via `evaluate()`
 
@@ -760,7 +757,7 @@ constexpr void array_evaluate(Out&& out, Expr&& expr) {
 
 GPU kernel fusion would operate much like Stan Math's [OpenCL kernel fusion](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp).
 
-The expressions for GPU kernels will accumulate the components of a kernel into separate components of the overall kernel. Then at the end the kernel components will be accumulated into one string and compiled at runtime via a runtime driver.
+The expressions for GPU kernels will accumulate the components of a kernel into separate strings representing the overall kernel. When the kernel needs to be evaluated, the kernel components will be accumulated into one string and compiled at runtime via a runtime driver.
 
 ```cpp
 struct kernel_parts {
@@ -828,7 +825,7 @@ inline std::ostream& operator<<(std::ostream& os, kernel_parts& parts) {
 }
 ```
 
-An example base expression for element-wise expressions looks like the following. You can see a full impl [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp#L1) in Stan Math.
+An example base expression for element-wise expressions on the gpu looks like the following. You can see a full impl [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/elt_function_cl.hpp#L1) in Stan Math.
 
 ```cpp
 template<class T>
@@ -853,17 +850,13 @@ class elt_function : public gpu_operation<Derived, Exprs...> {
 
   /**
    * Generates kernel code for this expression.
-   * @param row_index_name row index variable name
-   * @param col_index_name column index variable name
    * @param var_names_arg variable names of the nested expressions
    * @return part of kernel with code for this expression
    */
   template <StringLike StrRow, StringLike StrCol, StringLike... Names>
-  constexpr inline kernel_parts generate(
-      StrRow&& /*row_index_name*/, StrCol&& /*col_index_name */,
-      Names&&... var_names_arg) const {
+  constexpr inline kernel_parts generate(Names&&... var_names_arg) const {
     kernel_parts res{};
-
+    // All includes are constexpr
     for (const char* incl : base::derived().includes) {
       res.includes += incl;
     }
@@ -880,7 +873,9 @@ class elt_function : public gpu_operation<Derived, Exprs...> {
 };
 ```
 
-More research needs to be done on kernel runtime generation. For a cuda target [NVRTC](https://docs.nvidia.com/cuda/archive/10.1/pdf/NVRTC_User_Guide.pdf) is the most likely driver target.
+Once a kernel needs to be evaluated, all components of the kernel are accumulated, the kernel is compiled via a JIT, the expression arguments are passed to the kernel, and then the kernel is executed. See [here](https://github.com/stan-dev/math/blob/develop/stan/math/opencl/kernel_generator/multi_result_kernel.hpp#L34) For Stan Math's impl for doing this.
+
+More research needs to be done on kernel runtime generation for CUDA. For a cuda target [NVRTC](https://docs.nvidia.com/cuda/archive/10.1/pdf/NVRTC_User_Guide.pdf) is the most likely driver target.
 
 # Drawbacks
 
@@ -904,15 +899,15 @@ The one good thing is that we can actually utilize a lot of other open source pr
 1. Eigen's packet math can be modified slightly to fit this framework
 2. Stan's OpenCL backend already does the kernel generation. We just need to change it for CUDA.
 
-# Rationale and alternatives
+# Rationale and Alternatives
 
 - Why is this design the best in the space of possible designs?
 
-I chose my design based off of Eigen and Blaze, which imo have nice APIs. This design doc is an attempt to handle some of Eigen's short comings.
+I chose my design based off of Eigen and Blaze, which imo have nice APIs. This design doc is an attempt to handle some of Eigen's short comings while making the UI a little nicer.
 
 - What other designs have been considered and what is the rationale for not choosing them?
 
-I've tried making pull requests for several of these things in Eigen. The authors of Eigen do not seem interested in allocator aware matrices. And because of some internal choices they are unable to have matrices that can operate at compile time.
+I've tried making pull requests for several of these things in Eigen. The authors of Eigen do not seem interested in allocator aware matrices. And because of some internal choices they are unable to have matrices that can operate at compile time. While they have a tensor extension in unsupported, it is maintained by google which is notorious for dropping projects.
 
 - What is the impact of not doing this?
 
@@ -921,5 +916,11 @@ Nothing that bad. We will stay with Eigen being pretty much the only used matrix
 # Unresolved questions
 
 - What parts of the design do you expect to resolve through the RFC process before this gets merged?
+
+  - Should the GPU backend be CUDA or should we target something like [Triton](https://github.com/triton-lang/triton) and use the LLVM jit to compile?
+
 - What parts of the design do you expect to resolve through the implementation of this feature before stabilization?
+  - Mostly I'd like to resolve whether others think this kind of library is a good idea.
+
 - What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
+  - I'd like to not think about `complex` types at this time as there are a lot of possible solutions that would fit in this project.
