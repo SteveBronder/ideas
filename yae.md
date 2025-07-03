@@ -23,6 +23,9 @@ constexpr yae::Vector<opt, 2> res = mat * vec;
 
 2. CPU and GPU code should support expression fusion.
 
+Like [Stan Math's OpenCL backend](https://github.com/stan-dev/design-docs/blob/master/designs/0003-opencl_kernel_generator.md), we should be able to create fused kernels on the fly.
+
+
 ```c++
 using yae::Tensor, yae::Dynamic, yae::Index, yae::Options;
 // Use a cuda backend and allocator
@@ -97,6 +100,20 @@ Tensor<opt, Dynamic, 8, Dynamic> ten2(5, 8, 3);
 auto ten1_exp_sum = yae::to_array(ten1) | yae::exp | yae::sum;
 auto res = ten1 * ten2 + ten1_exp_sum;
 ```
+
+Unlike Eigen, writing functions that return expressions should not be dangerous and `auto` should be safe to use. The example below shows code that returns an Eigen expression from a function and then evaluates it on the next line. The issue is that Eigen only stores references inside of expressions and so after the function is assigned on the right hand side `expr` will be holding a dangling reference to the input. Evaluating into `res` on the next line will cause a crash.
+
+```cpp
+template <typename T>
+auto my_fun(T&& x) {
+  return x.array().exp().matrix();
+}
+using Mat = Eigen::Matrix<double, -1, -1>
+auto expr = my_fun(Mat::Random(10, 10).eval());
+auto res = expr.eval();
+```
+
+This new matrix library will use C++ value semantics to know if an input to expression is a temporary it can take ownership of. This will allow users to write functions that return expressions and use `auto` safely.
 
 5. It should be extensible by users.
 For a particular CPU or GPU the user should be able to override operations and information given to the program so that they are able to fully utilize their hardware.
@@ -200,6 +217,26 @@ using yae::to_array;
 auto mat_1_mutate = to_array(std::move(mat_1)) | yae::exp;
 // mat_3 will use the memory from mat_1_mutate
 auto mat_3 = to_array(mat_2) + to_array(std::move(mat_1_mutate));
+```
+
+7. Wrapper for drop in replacement with Eigen code.
+
+The library should have a wrapper class that will allow allowing users to easily port to the new library. In the example below, the `yae::EigenWrapper` class can be used to give the matrix type "member functions" that allow for interop with functions written to use Eigen matrices.
+
+```cpp
+
+template <typename T>
+auto my_fun(T&& x) {
+  return x.array().exp().rowwise().sum().eval();
+}
+using yae::Matrix, yae::Dynamic, yae::Options;
+using opt = Options<double>;
+Matrix<opt, Dynamic, Dynamic>  mat_1(5, 10);
+yae::EigenWrapper mat(mat_1);
+// Now we can use our code written with Eigen in mind.
+double y = my_fun(mat);
+// Can also easily construct from an Eigen Matrix type
+Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> eig_mat(mat);
 ```
 
 ---
