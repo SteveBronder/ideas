@@ -6,7 +6,10 @@ I want to write my perfect matrix/tensor library.
 Eigen is great, but there are a few things that are not possible in their project.
 And by "not possible" I mean that I or others have offered to implement or have implemented these things and they either did not work given Eigen's backend code or the Eigen team did not like them.
 
-1. The matrices should be usable in a constexpr context.
+1. I want an "Unopinionated" library.
+By that I mean I want the user to be able to rip out the things they like from the library and easily replace the things they do not like. Some examples include dispatch for function calls, packet math for SIMD, memory allocations, and how the expression evaluator walks. If the user thinks they can do something faster, they should be allowed to!
+
+2. The matrices should be usable in a constexpr context.
 Often times we have to do some precomputation before running an algorithm.
 It is nice to be able to execute that computation during compilation.
 
@@ -21,7 +24,7 @@ constexpr yae::Vector<opt, 2> vec(vec_data);
 constexpr yae::Vector<opt, 2> res = mat * vec;
 ```
 
-2. CPU and GPU code should support expression fusion.
+3. CPU and GPU code should support expression fusion.
 
 Like [Stan Math's OpenCL backend](https://github.com/stan-dev/design-docs/blob/master/designs/0003-opencl_kernel_generator.md), we should be able to create fused kernels on the fly.
 
@@ -48,7 +51,7 @@ ten2.set_random();
 Tensor<opt, Dynamic, 2, 3> res = ten1 * ten2;
 ```
 
-3. The matrices should be allocator aware.
+4. The matrices should be allocator aware.
 One of the largest benefits of C++ is being able to manage your own memory.
 Along with this, fixed size matrices should have an option to have their memory still come from an allocator.
 
@@ -81,7 +84,7 @@ Tensor<dynamic_opt, 5, 2, 10000> res = (ten1 * ten3).allocator(other_alloc);
 
 ```
 
-4. It should have a nice API like Eigen
+5. It should have a nice API like Eigen
 
 - I'd like to make it somewhere between blaze and Eigen.
 Like Eigen, I like the idea of forcing users to use an array wrapper for array like operations.
@@ -115,7 +118,7 @@ auto res = expr.eval();
 
 This new matrix library will use C++ value semantics to know if an input to expression is a temporary it can take ownership of. This will allow users to write functions that return expressions and use `auto` safely.
 
-5. It should be extensible by users.
+6. It should be extensible by users.
 For a particular CPU or GPU the user should be able to override operations and information given to the program so that they are able to fully utilize their hardware.
 
 ```c++
@@ -200,7 +203,7 @@ double res = dot_product(vec_1, vec_2);
 
 Using the [cpu_features](https://github.com/google/cpu_features) library, a utility will be available to auto generate general information for a users CPU.
 
-6. Smartly reusing memory when possible.
+7. Smartly reusing memory when possible.
 
 When an object is a temporary, the internals should be smart enough to know we can use the temporaries memory in place.
 
@@ -219,7 +222,7 @@ auto mat_1_mutate = to_array(std::move(mat_1)) | yae::exp;
 auto mat_3 = to_array(mat_2) + to_array(std::move(mat_1_mutate));
 ```
 
-7. Wrapper for drop in replacement with Eigen code.
+8. Wrapper for drop in replacement with Eigen code.
 
 The library should have a wrapper class that will allow allowing users to easily port to the new library. In the example below, the `yae::EigenWrapper` class can be used to give the matrix type "member functions" that allow for interop with functions written to use Eigen matrices.
 
@@ -238,6 +241,29 @@ double y = my_fun(mat);
 // Can also easily construct from an Eigen Matrix type
 Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> eig_mat(mat);
 ```
+
+9. A fast compilation mode for matrices.
+
+Waiting on a compile from a project that uses a lot of Eigen can be grueling. If the developer wants to compile quickly they can use a `yae::FastComplile` as their cpu specialization. When an expression sees a `yae::FastCompile` as their CPU choice everything will execute eagerly and only simple loops will be used.
+
+```cpp
+using opt = Options<double,
+  Index,
+  yae::default_alloctor<double>,
+  yae::CPUEngine<yae::FastCompile>>;
+Matrix<opt, Dynamic, Dynamic> mat_1(5, 5);
+mat_1.set_random();
+Matrix<opt, Dynamic, Dynamic> mat_2(5, 5);
+mat_2.set_random();
+// Everything here will eagerly execute
+Matrix<opt, Dynamic, Dynamic> res =
+  (yae::array(mat_1) | yae::exp | yae::matrix) *
+  (yae::array(mat_1) | yae::log2 | yae::sqrt | yae::matrix);
+```
+
+10. As much documentation, if not more, than Eigen.
+
+One of the huge benefits of Eigen is how nice all of it's documentation is. Any successor library would need at least as much documentation to get users started.
 
 ---
 
