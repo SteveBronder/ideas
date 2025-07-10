@@ -2,14 +2,139 @@
 
 ## My Ideal Matrix Library
 
-I want to write my perfect matrix/tensor library.
+I want to write my (the?) perfect tensor library.
+I think C++23 gives the language features we needed to build a high performance tensor library with a slick and clean API.
+The main linear algebra library in C++ is typically Eigen.
+But Eigen was written almost 20 years ago.
+They wrote Eigen well before C++11 introduced move semantics, constexpr, standard allocators, ranges, concepts, or mdspan style views.
+Eigen's authors hand to hand roll metaprogramming tricks and expression trees.
+The results are impressive and have proven robust, but today those workarounds come with limitations. I think now there are enough tools in C++23 that we can create a powerful and modern tensor library that was not possible before.
+
 Eigen is great, but there are a few things that are not possible in their project.
 And by "not possible" I mean that I or others have offered to implement or have implemented these things and they either did not work given Eigen's backend code or the Eigen team did not like them.
+Below is a list of things I would like inside of a new tensor library.
 
 1. I want an "Unopinionated" library.
-By that I mean I want the user to be able to rip out the things they like from the library and easily replace the things they do not like. Some examples include dispatch for function calls, packet math for SIMD, memory allocations, and how the expression evaluator walks. If the user thinks they can do something faster, they should be allowed to!
 
-2. The matrices should be usable in a constexpr context.
+By that I mean I want the user to be able to rip out the things they like from the library and easily replace the things they do not like.
+Some examples include dispatch for function calls, packet math for SIMD, memory allocations, and how the expression evaluator walks.
+If the user thinks they can do something faster, they should be allowed to!
+Item N has some examples can do this using concepts.
+
+2. A clean algebra oriented API
+
+I'd like to make it somewhere between blaze and Eigen.
+Like Eigen, the public interface shoudl read like textbook linear algebra. I also like the idea of forcing users to use an array wrapper for array like operations.
+Unlike Eigen, I prefer we use free functions instead of member functions.
+In the example below we make a tensor, use the `to_array()` and then C++23's pipe operator to element-wise exponentiate and sum the tensor.
+Then the sum is computed and added to an expression for a tensor multiplication.
+
+```c++
+using yae::Tensor, yae::Dynamic, yae::Index, yae::Options;
+using opt = Options<double>;
+// Create a <Dynamic , 2, 8> tensor type
+Tensor<opt, Dynamic, 2, 8> ten1(5, 2, 8);
+ten1.set_random();
+Tensor<opt, Dynamic, 2, 8> ten2(5, 2, 8);
+ten2.set_random();
+// Use C++23 pipe operator for chaining array ops together
+// NOTE: This is an expression because of auto
+auto ten1_exp_sum = yae::to_array(ten1) | yae::exp | yae::sum;
+auto res = ten1 * ten2 + ten1_exp_sum;
+```
+
+Unlike Eigen, writing functions that return expressions should not be dangerous and `auto` should be safe to use.
+The example below shows code that returns an Eigen expression from a function and then evaluates it on the next line.
+The issue is that Eigen only stores references inside of expressions.
+So after the function is assigned on the right hand side `expr` will be holding a dangling reference to the input.
+Evaluating into `res` on the next line will cause a crash.
+
+```cpp
+template <typename T>
+auto my_fun(T&& x) {
+  return std::forward<T>(x).array().exp().matrix();
+}
+using Mat = Eigen::Matrix<double, -1, -1>
+auto expr = my_fun(Mat::Random(10, 10).eval());
+auto res = expr.eval();
+```
+
+This new matrix library will use C++ value semantics to know if an input to expression is a temporary it can take ownership of. This will allow users to write functions that return expressions and use `auto` safely.
+
+```cpp
+template <typename T>
+auto my_fun(T&& x) {
+  return std::forward<T>(x) | yae::to_array | yae::exp | to_matrix;
+}
+using yae::Tensor, yae::Dynamic, yae::Index, yae::Options;
+using opt = Options<double>;
+using Mat = yae::Tensor<double, Dynamic, Dynamic>
+// expr now owns the input
+auto expr = my_fun(Mat::Random(10, 10).eval());
+auto res = yae::eval(expr);
+```
+
+Slicing and dicing tensors should also be simple. Note this part of the API design is still up for dicussion, but reading about [Dumpy](https://dynomight.substack.com/p/dumpy) gave me some fun ideas.
+
+
+For the rest of this section assume we are working with the following tensors
+
+```cpp
+using yae::Tensor, yae::Dynamic, yae::Index, yae::Options;
+using opt = Options<double>;
+// Create a <Dynamic , 2, 8> tensor type
+// Sizes: I = 5, J = 4, N = 8
+// I, N
+Tensor<opt, 5, 8> X;
+X.set_random();
+// J, N
+Tensor<opt, 4, 8> Y;
+Y.set_random();
+// I, J, N, N
+Tensor<opt, 5, 4, 8, 8> A;
+A.set_random();
+// Z will be I, J
+```
+
+Using C++23's non-type template paramters of class type we can make string like axis at compile time.
+For basic indices, `i` is the first, `j`, is the second, `k` is the 3rd, and so on.
+This would let us have a `for_each_index` function that replicates part of what Dumpy does. If we used C++26 then we would have access to `_` which could be nice.
+
+```cpp
+Tensor<opt, 5, 4> Z;
+// Here I and J represent slicing along the i'th and j'th index
+yae::for_each_index<"i", "j">(A, Y, X, Z, [](auto I, auto J) {
+  Z(I, J) = Y(J, _) * solve(A(I, J, _, _), X(I, _));
+})
+```
+
+I don't know how to do it yet, but it would be nice to be able to assign from a `for_each_index` like so.
+
+```cpp
+auto Z = yae::for_each_index<"i", "j">(A, Y, X, [](auto I, auto J) {
+  return Y(J, _) * solve(A(I, J, _), X(I, _));
+})
+```
+
+Tensors can also be "sliced" before operations to tell future operations what they should iterate over.
+
+```cpp
+// Slot just means this represents a tensor that has not been created yet.
+// Indexed<Tensor<8>, 4> to know what to slice off of
+auto Y_ = Y.slice<0>();
+// Indexed<Tensor<8>, 5>
+auto X_ = X.slice<0>();
+// Indexed<Tensor<8, 8>, 5, 4>
+auto A_ = A.slice<0, 1>()
+// Will deduce sizes to know Z should be 5, 4
+auto Z = Y_ * solve(A_, X_);
+```
+
+3. Reusing stuff that already exists
+
+Though the package yae stands for `Yet Another Eigen`, I don't want to rewrite things that already exist. We can use mdspan for tensor layout and access information, a (hopefully) small rewrite of Eigen's packet math for CPU SIMD operations, and a (hopefully) slightly modified version of Stan's GPU kernel fusion scheme.
+
+4. The matrices should be usable in a constexpr context.
 Often times we have to do some precomputation before running an algorithm.
 It is nice to be able to execute that computation during compilation.
 
@@ -24,9 +149,11 @@ constexpr yae::Vector<opt, 2> vec(vec_data);
 constexpr yae::Vector<opt, 2> res = mat * vec;
 ```
 
-3. CPU and GPU code should support expression fusion.
+This was available in Eigen for a short while, but was removed due to issues in the underlying implementation.
 
-Like [Stan Math's OpenCL backend](https://github.com/stan-dev/design-docs/blob/master/designs/0003-opencl_kernel_generator.md), we should be able to create fused kernels on the fly.
+5. CPU and GPU code should support expression fusion.
+
+We can create fused kernels in a simliar fashion to [Stan Math's OpenCL backend](https://github.com/stan-dev/design-docs/blob/master/designs/0003-opencl_kernel_generator.md). We should be able to create fused kernels on the fly using cuda's runtime library.
 
 
 ```c++
@@ -51,7 +178,8 @@ ten2.set_random();
 Tensor<opt, Dynamic, 2, 3> res = ten1 * ten2;
 ```
 
-4. The matrices should be allocator aware.
+6. The matrices should be allocator aware.
+
 One of the largest benefits of C++ is being able to manage your own memory.
 Along with this, fixed size matrices should have an option to have their memory still come from an allocator.
 
@@ -84,42 +212,11 @@ Tensor<dynamic_opt, 5, 2, 10000> res = (ten1 * ten3).allocator(other_alloc);
 
 ```
 
-5. It should have a nice API like Eigen
+7. It should be extensible by users.
 
-- I'd like to make it somewhere between blaze and Eigen.
-Like Eigen, I like the idea of forcing users to use an array wrapper for array like operations.
-Unlike Eigen, I prefer we use free functions instead of member functions.
-In the example below we make a tensor, use the `to_array()` and then C++23's pipe operator to element-wise exponentiate and sum the tensor.
-Then the sum sum is computed and added to an expression for a tensor multiplication.
+For a particular CPU or GPU the user should be able to override operations and information given to the program so that they are able to fully utilize their hardware. We can do this by overloading the `CpuEngine<>` class for specific CPU types. Because functions and classes that use concepts choose the clostest match, users can overload functions and classes with their CPU engine's concept to modify any part of the library they wish.
 
-```c++
-using yae::Tensor, yae::Dynamic, yae::Index, yae::Options;
-using opt = Options<double>;
-Tensor<opt, Dynamic, 2, 8> ten1(5, 2, 8);
-ten1.set_random();
-Tensor<opt, Dynamic, 8, Dynamic> ten2(5, 8, 3);
-// Use C++23 pipe operator for chaining array ops together
-// NOTE: This is an expression because of auto
-auto ten1_exp_sum = yae::to_array(ten1) | yae::exp | yae::sum;
-auto res = ten1 * ten2 + ten1_exp_sum;
-```
-
-Unlike Eigen, writing functions that return expressions should not be dangerous and `auto` should be safe to use. The example below shows code that returns an Eigen expression from a function and then evaluates it on the next line. The issue is that Eigen only stores references inside of expressions and so after the function is assigned on the right hand side `expr` will be holding a dangling reference to the input. Evaluating into `res` on the next line will cause a crash.
-
-```cpp
-template <typename T>
-auto my_fun(T&& x) {
-  return x.array().exp().matrix();
-}
-using Mat = Eigen::Matrix<double, -1, -1>
-auto expr = my_fun(Mat::Random(10, 10).eval());
-auto res = expr.eval();
-```
-
-This new matrix library will use C++ value semantics to know if an input to expression is a temporary it can take ownership of. This will allow users to write functions that return expressions and use `auto` safely.
-
-6. It should be extensible by users.
-For a particular CPU or GPU the user should be able to override operations and information given to the program so that they are able to fully utilize their hardware.
+In the below code, we write a specialization of `CpuEngine` for the Intel Raptor Cove i9 13900KF, make a concept for it, override the dot product function, then call that function with two vectors.
 
 ```c++
 namespace yae {
@@ -176,6 +273,7 @@ struct CpuEngine<i913900KF> {
   static constexpr std::size_t page_size = 16384;
 };
 
+// The i9 13900KF concept
 template <typename T>
 concept Enginei913900KF =
   is_expression<T> &&
@@ -201,11 +299,11 @@ vec_2.set_random();
 double res = dot_product(vec_1, vec_2);
 ```
 
-Using the [cpu_features](https://github.com/google/cpu_features) library, a utility will be available to auto generate general information for a users CPU.
+Using the [cpu_features](https://github.com/google/cpu_features) library, a utility will be available to auto generate general information for a user's CPU.
 
-7. Smartly reusing memory when possible.
+8. Smartly reusing memory when possible.
 
-When an object is a temporary, the internals should be smart enough to know we can use the temporaries memory in place.
+When an object is a temporary, the internals should be smart enough to know we can use the temporary's memory in place.
 
 ```c++
 using yae::Matrix, yae::Dynamic, yae::Options;
@@ -217,12 +315,12 @@ mat_2.set_random();
 
 using yae::to_array;
 // An expression taking ownership of mat_1
-auto mat_1_mutate = to_array(std::move(mat_1)) | yae::exp;
+auto mat_1_mutate = std::move(mat_1) | yae::to_array | yae::exp;
 // mat_3 will use the memory from mat_1_mutate
 auto mat_3 = to_array(mat_2) + to_array(std::move(mat_1_mutate));
 ```
 
-8. Wrapper for drop in replacement with Eigen code.
+9. Wrapper for drop in replacement with Eigen code.
 
 The library should have a wrapper class that will allow allowing users to easily port to the new library. In the example below, the `yae::EigenWrapper` class can be used to give the matrix type "member functions" that allow for interop with functions written to use Eigen matrices.
 
@@ -242,7 +340,7 @@ double y = my_fun(mat);
 Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> eig_mat(mat);
 ```
 
-9. A fast compilation mode for matrices.
+10. A fast compilation mode for matrices.
 
 Waiting on a compile from a project that uses a lot of Eigen can be grueling. If the developer wants to compile quickly they can use a `yae::FastComplile` as their cpu specialization. When an expression sees a `yae::FastCompile` as their CPU choice everything will execute eagerly and only simple loops will be used.
 
@@ -261,7 +359,7 @@ Matrix<opt, Dynamic, Dynamic> res =
   (yae::array(mat_1) | yae::log2 | yae::sqrt | yae::matrix);
 ```
 
-10. As much documentation, if not more, than Eigen.
+11. As much documentation, if not more, than Eigen.
 
 One of the huge benefits of Eigen is how nice all of it's documentation is. Any successor library would need at least as much documentation to get users started.
 
